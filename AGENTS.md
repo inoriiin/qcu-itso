@@ -15,7 +15,7 @@
 - Student ID format: `xx-xxxx` (year enrolled - unique number)
 - Statuses/filing types are Postgres enums in `supabase/schema.sql` — keep `src/App.tsx` status/type lists in sync
 - Live mode (signed in via Supabase) reads/writes Supabase via `src/lib/db.ts`; `localStorage` (`itso.*` keys) is only the offline fallback
-- SQL run order (all already applied to the live project): `schema.sql` → `fixup.sql` → `phase3_notifications.sql` → `phase4_profiles.sql` → `phase5_scheduled_jobs.sql` (pg_cron) → `phase6_links_events.sql` → `phase7_email_cron.sql` (pg_net; secret placeholder must be filled in at run time, never committed)
+- SQL run order (all already applied to the live project): `schema.sql` → `fixup.sql` → `phase3_notifications.sql` → `phase4_profiles.sql` → `phase5_scheduled_jobs.sql` (pg_cron) → `phase6_links_events.sql` → `phase7_email_cron.sql` (pg_net; secret placeholder must be filled in at run time, never committed) → `phase8_instant_email.sql` (instant send trigger + `claim_pending_notifications` RPC used by the Edge Function)
 - New schema changes: add a new `supabase/phaseN_*.sql` file (idempotent: `if not exists`, `drop ... if exists`); user runs it in the Supabase SQL Editor, then `notify pgrst, 'reload schema';`
 - Supabase gotchas: 403 / `42501 permission denied` = missing table GRANTs (this project doesn't auto-grant; see fixup.sql — covers `authenticated` + `service_role`), not RLS. `PGRST202` function not found = migration not run or schema cache stale.
 - Mutations that RLS blocks with an UPDATE matching 0 rows return no error — keep that in mind when debugging "saved but nothing changed"
@@ -23,7 +23,8 @@
 ## Email / scheduled jobs
 - `notifications_log` is both the in-app bell feed and the email outbox (`delivery_status`: pending / sent / failed_* / skipped). Rows are created only by DB triggers/jobs; recipient = student email or `'admin'` (expanded to all active admins at send time)
 - Edge Function `supabase/functions/send-notifications/index.ts` is deployed via the Supabase dashboard editor (paste + Deploy; no CLI). Verify JWT is OFF; auth is the `x-cron-secret` header
-- pg_cron jobs: `itso-email-dispatch` (every 5 min → Edge Function), `itso-daily` (01:00 UTC → SER/defect reminders + 10-year auto-archive)
+- Delivery is instant: a statement-level trigger on `notifications_log` runs the `itso-email-dispatch` cron command via pg_net. Rows are claimed (`delivery_status='sending'`) before sending, so concurrent runs can't double-send
+- pg_cron jobs: `itso-email-dispatch` (every 5 min → Edge Function; backup/retry path), `itso-daily` (01:00 UTC → SER/defect reminders + 10-year auto-archive)
 - Edge Function secrets: `CRON_SECRET`, `GMAIL_USER` + `GMAIL_APP_PASSWORD` (current provider — Gmail SMTP port 465), `RESEND_API_KEY` (fallback; needs a verified domain to email anyone but the signup address), optional `EMAIL_TEST_RECIPIENT` (redirects all mail), `EMAIL_FROM`, `SITE_URL`
 - Local-only secret: `supabase/cron_secret.local.txt` (gitignored)
 

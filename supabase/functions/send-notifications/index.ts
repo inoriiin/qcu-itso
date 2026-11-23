@@ -55,12 +55,7 @@ Deno.serve(async (req) => {
     return new Response("unauthorized", { status: 401 });
   }
 
-  const { data: rows, error } = await supabase
-    .from("notifications_log")
-    .select("id, recipient, type, payload")
-    .eq("delivery_status", "pending")
-    .order("created_at")
-    .limit(50);
+  const { data: rows, error } = await supabase.rpc("claim_pending_notifications", { p_limit: 50 });
   if (error) return new Response(error.message, { status: 500 });
   if (!rows?.length) return Response.json({ sent: 0 });
 
