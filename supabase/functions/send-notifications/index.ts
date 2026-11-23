@@ -1,0 +1,115 @@
+// QCU ITSO — notification email dispatcher
+// Picks up pending notifications_log rows, sends them via Gmail SMTP or Resend,
+// and stamps delivery_status so the row doubles as the email audit trail.
+// Called on a schedule by pg_cron (see below) or manually with:
+//   curl -X POST <fn-url> -H "x-cron-secret: <CRON_SECRET>"
+// deno-lint-ignore-file no-explicit-any
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { SMTPClient } from "https://deno.land/x/denomailer@1.6.0/mod.ts";
+
+const supabase = createClient(
+  Deno.env.get("SUPABASE_URL")!,
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+);
+const RESEND_KEY = Deno.env.get("RESEND_API_KEY");
+// Gmail mode: set GMAIL_USER + GMAIL_APP_PASSWORD to send through a Gmail account
+// (no domain needed). Otherwise emails go through Resend.
+const GMAIL_USER = Deno.env.get("GMAIL_USER")?.trim();
+const GMAIL_PASS = Deno.env.get("GMAIL_APP_PASSWORD")?.replace(/\s/g, "");
+const FROM = Deno.env.get("EMAIL_FROM") ??
+  (GMAIL_USER ? `QCU ITSO <${GMAIL_USER}>` : "QCU ITSO <onboarding@resend.dev>");
+// Test mode: until a domain is verified in Resend, set EMAIL_TEST_RECIPIENT to your
+// Resend signup email — every email is redirected there, tagged with the real recipient.
+const TEST_TO = Deno.env.get("EMAIL_TEST_RECIPIENT")?.trim();
+
+type Row = { id: string; recipient: string; type: string; payload: Record<string, any> };
+
+function emailFor(row: Row): { subject: string; html: string } {
+  const p = row.payload ?? {};
+  const ref = p.reference ? ` (${p.reference})` : "";
+  const open = `<p><a href="${Deno.env.get("SITE_URL") ?? "http://localhost:5173"}">Open the ITSO workspace</a></p>`;
+  const wrap = (body: string) => `<div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.5"><p>Hello,</p>${body}${open}<p style="color:#666;font-size:12px">QCU Intellectual Property &amp; Technology Support Office</p></div>`;
+  const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
+  switch (row.type) {
+    case "new_submission": return { subject: `New submission: ${p.title}`, html: wrap(`<p>A new filing was submitted${ref}: <b>${p.title}</b>.</p>`) };
+    case "status_change": return { subject: `Status update${ref}: ${p.new}`, html: wrap(`<p>Your submission <b>${p.title}</b>${ref} moved from <b>${p.old}</b> to <b>${p.new}</b>.</p>`) };
+    case "remark": return { subject: `New remark on your submission${ref}`, html: wrap(`<p>ITSO left a comment on <b>${p.title}</b>:</p><blockquote style="border-left:3px solid #FD7201;padding-left:12px;color:#444">${p.text ?? ""}</blockquote>`) };
+    case "certificate": return { subject: `Certificate issued${ref}`, html: wrap(`<p>Congratulations — a certificate was issued for <b>${p.title}</b>${ref}. Sign in to view or download it.</p>`) };
+    case "formality_defect": return { subject: `Action needed${ref}: formality defect (round ${p.round})`, html: wrap(`<p>A formality defect notice (round ${p.round}) was logged on <b>${p.title}</b>. Please address it before <b>${fmtDate(p.deadline)}</b>.</p>`) };
+    case "ser_reminder": return { subject: `SER deadline ${p.overdue ? "overdue" : "approaching"}${ref}`, html: wrap(`<p>The Substantive Examination Request for <b>${p.title}</b>${ref} is ${p.overdue ? "past its deadline" : "due on " + fmtDate(p.deadline)}. Please mark it handled in the system.</p>`) };
+    case "defect_reminder": return { subject: `Defect deadline ${p.overdue ? "overdue" : "approaching"}${ref}`, html: wrap(`<p>Formality defect round ${p.round} on <b>${p.title}</b>${ref} is ${p.overdue ? "past its deadline" : "due on " + fmtDate(p.deadline)}.</p>`) };
+    case "registration_received": return { subject: `Registration received: ${p.event}`, html: wrap(`<p>Your registration for <b>${p.event}</b> was received and is pending approval.</p>`) };
+    case "registration_approved": return { subject: `Registration approved: ${p.event}`, html: wrap(`<p>Your registration for <b>${p.event}</b> was approved. See you there!</p>`) };
+    case "registration_declined": return { subject: `Registration update: ${p.event}`, html: wrap(`<p>Your registration for <b>${p.event}</b> was declined.</p>`) };
+    case "registration_request": return { subject: `Registration request: ${p.event}`, html: wrap(`<p><b>${p.student}</b> requested to join <b>${p.event}</b>. Approve or decline it in the workspace.</p>`) };
+    case "new_event": return { subject: `New ITSO event: ${p.event}`, html: wrap(`<p>A new event was posted: <b>${p.event}</b>${p.date ? " on " + fmtDate(p.date) : ""}${p.mode ? " (" + p.mode + ")" : ""}. Register from the Events page.</p>`) };
+    case "broken_link": return { subject: `Drive link needs attention${ref}`, html: wrap(`<p>The Google Drive folder for <b>${p.title}</b>${ref} was reported as inaccessible${p.note ? `: ${p.note}` : "."}</p>`) };
+    case "drive_link_updated": return { subject: `Drive link updated${ref}`, html: wrap(`<p>The Drive folder link for <b>${p.title}</b>${ref} was updated.</p>`) };
+    default: return { subject: `ITSO update${ref}`, html: wrap(`<p>There's a new update on ${p.title ? `<b>${p.title}</b>` : "your workspace"}${ref}.</p>`) };
+  }
+}
+
+Deno.serve(async (req) => {
+  const secret = Deno.env.get("CRON_SECRET");
+  if (!secret || req.headers.get("x-cron-secret") !== secret) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  const { data: rows, error } = await supabase
+    .from("notifications_log")
+    .select("id, recipient, type, payload")
+    .eq("delivery_status", "pending")
+    .order("created_at")
+    .limit(50);
+  if (error) return new Response(error.message, { status: 500 });
+  if (!rows?.length) return Response.json({ sent: 0 });
+
+  const { data: adminRows } = await supabase
+    .from("authorized_emails")
+    .select("email")
+    .in("role", ["admin", "super_admin"])
+    .eq("status", "active");
+  const admins = (adminRows ?? []).map((r: { email: string }) => r.email);
+
+  const smtp = GMAIL_USER && GMAIL_PASS
+    ? new SMTPClient({ connection: { hostname: "smtp.gmail.com", port: 465, tls: true, auth: { username: GMAIL_USER, password: GMAIL_PASS } } })
+    : null;
+
+  // Returns "sent" or a failed_* status string
+  const deliver = async (to: string[], subject: string, html: string): Promise<string> => {
+    if (smtp) {
+      try {
+        await smtp.send({ from: FROM, to, subject, html });
+        return "sent";
+      } catch (e) {
+        console.error("[smtp]", e);
+        return "failed_smtp";
+      }
+    }
+    if (!RESEND_KEY) return "failed_no_provider";
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${RESEND_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ from: FROM, to, subject, html }),
+    });
+    if (!res.ok) console.error("[resend]", res.status, await res.text());
+    return res.ok ? "sent" : `failed_${res.status}`;
+  };
+
+  let sent = 0;
+  const results: Record<string, string> = {};
+  for (const row of rows as Row[]) {
+    const to = row.recipient === "admin" ? admins : [row.recipient];
+    let status = "skipped";
+    if (to.length) {
+      const { subject, html } = emailFor(row);
+      status = TEST_TO
+        ? await deliver([TEST_TO], `[to: ${to.join(", ")}] ${subject}`, html)
+        : await deliver(to, subject, html);
+    }
+    await supabase.from("notifications_log").update({ delivery_status: status }).eq("id", row.id);
+    if (status === "sent") sent++; else results[row.id] = status;
+  }
+  if (smtp) await smtp.close();
+  return Response.json({ sent, failed: results, provider: smtp ? "gmail" : "resend" });
+});
