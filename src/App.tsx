@@ -317,7 +317,7 @@ export default function App() {
   };
   const [now, setNow] = useState(() => new Date());
   useEffect(() => { const t = window.setInterval(() => setNow(new Date()), 60000); return () => window.clearInterval(t); }, []);
-  const greeting = (() => { const h = now.getHours(); return h >= 5 && h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })();
+  const greeting = (() => { const h = now.getHours(); return h >= 5 && h < 12 ? "Good morning" : h >= 12 && h < 18 ? "Good afternoon" : "Good evening"; })();
   const displayName = me ? (me.givenName ?? me.fullName?.split(" ")[0] ?? (role === "Admin" ? "Admin" : "there")) : (role === "Admin" ? "Admin" : "Alex");
   const avatarInitials = me?.fullName ? (w => w.length > 1 ? `${w[0][0]}${w[w.length - 1][0]}` : w[0][0])(me.fullName.trim().split(/\s+/)).toUpperCase() : (role === "Admin" ? "AD" : "AR");
   const myPapers = active.filter(p => isSupabaseConfigured ? p.ownerUuid === me?.studentUuid : p.student === CURRENT_STUDENT);
