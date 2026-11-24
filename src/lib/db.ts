@@ -5,7 +5,7 @@ export type Paper = {
   id: string; dbId?: string; ownerUuid?: string; title: string; studentId: string; student: string; program: string; college: string;
   authors: string[]; type: string; status: string; submitted: string; filed: string; problems: number;
   archived?: boolean; archiveReason?: string; drive?: string;
-  authorRows?: { id: string; name: string }[];
+  authorDetails?: { id?: string; name: string; email: string | null }[];
   linkReport?: { at: string; note?: string; by?: string };
   history: { status: string; at: string; by?: string; atRaw?: string }[];
   filedRaw?: string;
@@ -123,14 +123,14 @@ export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null
   const uuidOf = new Map<string, string>((subs.data ?? []).map((s: { id: string; reference_number: string }) => [s.reference_number, s.id]));
 
   const authorsBySub = new Map<string, string[]>();
-  const authorRowsBySub = new Map<string, { id: string; name: string }[]>();
+  const authorDetailsBySub = new Map<string, { id: string; name: string; email: string | null }[]>();
   for (const a of authors.data ?? []) {
     const list = authorsBySub.get(a.submission_id) ?? [];
     list.push(a.author_name);
     authorsBySub.set(a.submission_id, list);
-    const rows = authorRowsBySub.get(a.submission_id) ?? [];
-    rows.push({ id: a.id, name: a.author_name });
-    authorRowsBySub.set(a.submission_id, rows);
+    const rows = authorDetailsBySub.get(a.submission_id) ?? [];
+    rows.push({ id: a.id, name: a.author_name, email: a.email ?? null });
+    authorDetailsBySub.set(a.submission_id, rows);
   }
 
   const openProblems = new Map<string, number>();
@@ -190,7 +190,7 @@ export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null
     program: s.programs?.name ?? "—",
     college: s.colleges?.name ?? "—",
     authors: authorsBySub.get(s.id) ?? [],
-    authorRows: authorRowsBySub.get(s.id) ?? [],
+    authorDetails: authorDetailsBySub.get(s.id) ?? [],
     type: s.filing_type,
     status: s.current_status,
     submitted: fmt(s.date_created),
@@ -334,7 +334,7 @@ export async function loadActionLog(): Promise<ActionLogEntry[]> {
 
 export async function dbSubmitPaper(input: {
   studentUuid: string; title: string; studentIdNumber: string; college: string; program: string;
-  type: string; drive: string; authors: string[];
+  type: string; drive: string; authors: { name: string; email?: string | null }[];
 }) {
   if (!supabase) throw new Error("offline");
   const { data: prog } = await supabase.from("programs").select("id, college_id").eq("name", input.program).single();
@@ -353,8 +353,8 @@ export async function dbSubmitPaper(input: {
     .select("id")
     .single();
   if (error) throw error;
-  const rows = input.authors.map((name, i) => ({
-    submission_id: sub.id, author_name: name, order_index: i + 1, added_by_role: "student" as const,
+  const rows = input.authors.map((a, i) => ({
+    submission_id: sub.id, author_name: a.name, email: a.email ?? null, order_index: i + 1, added_by_role: "student" as const,
   }));
   const { error: aerr } = await supabase.from("submission_authors").insert(rows);
   if (aerr) throw aerr;
@@ -539,11 +539,11 @@ export async function dbUpdateAccountName(email: string, role: "student" | "admi
   if (error) throw error;
 }
 
-export async function dbAddAuthor(submissionDbId: string, name: string) {
+export async function dbAddAuthor(submissionDbId: string, name: string, email?: string | null) {
   const { data: last } = await supabase!.from("submission_authors").select("order_index")
     .eq("submission_id", submissionDbId).order("order_index", { ascending: false }).limit(1);
   const { error } = await supabase!.from("submission_authors")
-    .insert({ submission_id: submissionDbId, author_name: name, order_index: (last?.[0]?.order_index ?? 0) + 1, added_by_role: "student" });
+    .insert({ submission_id: submissionDbId, author_name: name, email: email ?? null, order_index: (last?.[0]?.order_index ?? 0) + 1, added_by_role: "student" });
   if (error) throw error;
 }
 
@@ -567,7 +567,10 @@ export async function dbDeleteAuthor(authorId: string) {
   if (error) throw error;
 }
 
-export async function dbRenameAuthor(authorId: string, name: string) {
-  const { error } = await supabase!.from("submission_authors").update({ author_name: name }).eq("id", authorId);
+export async function dbUpdateAuthor(authorId: string, patch: { name?: string; email?: string | null }) {
+  const update: Record<string, unknown> = {};
+  if (patch.name !== undefined) update.author_name = patch.name;
+  if (patch.email !== undefined) update.email = patch.email;
+  const { error } = await supabase!.from("submission_authors").update(update).eq("id", authorId);
   if (error) throw error;
 }

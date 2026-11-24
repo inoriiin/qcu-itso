@@ -27,17 +27,19 @@ type Row = { id: string; recipient: string; type: string; payload: Record<string
 function emailFor(row: Row): { subject: string; html: string } {
   const p = row.payload ?? {};
   const ref = p.reference ? ` (${p.reference})` : "";
-  const open = `<p><a href="${Deno.env.get("SITE_URL") ?? "http://localhost:5173"}">Open the ITSO workspace</a></p>`;
+  const co = !!p.coauthor;
+  const intro = co ? `<p>You're listed as a co-author on <b>${p.title}</b>${ref}, submitted to the QCU Innovation and Technology Support Office.</p>` : "";
+  const open = co ? "" : `<p><a href="${Deno.env.get("SITE_URL") ?? "http://localhost:5173"}">Open the ITSO workspace</a></p>`;
   const siteUrl = (Deno.env.get("SITE_URL") ?? "").replace(/\/+$/, "");
   const header = `<div style="margin-bottom:14px">${siteUrl ? `<img src="${siteUrl}/brand/qcu-logo.png" alt="" width="42" height="42" style="vertical-align:middle;border-radius:50%">` : ""}<span style="display:inline-block;vertical-align:middle;margin-left:10px"><b style="font-size:15px">Quezon City University</b><br><span style="font-size:12px;color:#666">Innovation and Technology Support Office</span></span></div>`;
   const wrap = (body: string) => `<div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.5">${header}<p>Hello,</p>${body}${open}<p style="color:#666;font-size:12px">Quezon City University · Innovation and Technology Support Office</p></div>`;
   const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
   switch (row.type) {
     case "new_submission": return { subject: `New submission: ${p.title}`, html: wrap(`<p>A new filing was submitted${ref}: <b>${p.title}</b>.</p>`) };
-    case "status_change": return { subject: `Status update${ref}: ${p.new}`, html: wrap(`<p>Your submission <b>${p.title}</b>${ref} moved from <b>${p.old}</b> to <b>${p.new}</b>.</p>`) };
-    case "remark": return { subject: `New remark on your submission${ref}`, html: wrap(`<p>ITSO left a comment on <b>${p.title}</b>:</p><blockquote style="border-left:3px solid #FD7201;padding-left:12px;color:#444">${p.text ?? ""}</blockquote>`) };
-    case "certificate": return { subject: `Certificate issued${ref}`, html: wrap(`<p>Congratulations — a certificate was issued for <b>${p.title}</b>${ref}. Sign in to view or download it.</p>`) };
-    case "formality_defect": return { subject: `Action needed${ref}: formality defect (round ${p.round})`, html: wrap(`<p>A formality defect notice (round ${p.round}) was logged on <b>${p.title}</b>. Please address it before <b>${fmtDate(p.deadline)}</b>.</p>`) };
+    case "status_change": return { subject: `Status update${ref}: ${p.new}`, html: wrap(co ? `${intro}<p>The submission moved from <b>${p.old}</b> to <b>${p.new}</b>.</p>` : `<p>Your submission <b>${p.title}</b>${ref} moved from <b>${p.old}</b> to <b>${p.new}</b>.</p>`) };
+    case "remark": return { subject: co ? `New remark on a submission you co-authored${ref}` : `New remark on your submission${ref}`, html: wrap(co ? `${intro}<p>ITSO left a comment on the submission:</p><blockquote style="border-left:3px solid #FD7201;padding-left:12px;color:#444">${p.text ?? ""}</blockquote>` : `<p>ITSO left a comment on <b>${p.title}</b>:</p><blockquote style="border-left:3px solid #FD7201;padding-left:12px;color:#444">${p.text ?? ""}</blockquote>`) };
+    case "certificate": return { subject: `Certificate issued${ref}`, html: wrap(co ? `${intro}<p>A certificate was issued for this submission. The submitting author can view and download it.</p>` : `<p>Congratulations — a certificate was issued for <b>${p.title}</b>${ref}. Sign in to view or download it.</p>`) };
+    case "formality_defect": return { subject: `Action needed${ref}: formality defect (round ${p.round})`, html: wrap(co ? `${intro}<p>A formality defect notice (round ${p.round}) was logged. The submitting author needs to address it before <b>${fmtDate(p.deadline)}</b>.</p>` : `<p>A formality defect notice (round ${p.round}) was logged on <b>${p.title}</b>. Please address it before <b>${fmtDate(p.deadline)}</b>.</p>`) };
     case "ser_reminder": return { subject: `SER deadline ${p.overdue ? "overdue" : "approaching"}${ref}`, html: wrap(`<p>The Substantive Examination Request for <b>${p.title}</b>${ref} is ${p.overdue ? "past its deadline" : "due on " + fmtDate(p.deadline)}. Please mark it handled in the system.</p>`) };
     case "defect_reminder": return { subject: `Defect deadline ${p.overdue ? "overdue" : "approaching"}${ref}`, html: wrap(`<p>Formality defect round ${p.round} on <b>${p.title}</b>${ref} is ${p.overdue ? "past its deadline" : "due on " + fmtDate(p.deadline)}.</p>`) };
     case "registration_received": return { subject: `Registration received: ${p.event}`, html: wrap(`<p>Your registration for <b>${p.event}</b> was received and is pending approval.</p>`) };
