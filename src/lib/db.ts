@@ -403,7 +403,7 @@ export async function dbAddDefect(submissionDbId: string, noticeDate: string, te
   const { data: def, error: derr } = await supabase!.from("formality_defects")
     .insert({ problem_id: prob.id, submission_id: submissionDbId, round_number: round, notice_date: noticeDate, details: text })
     .select("id").single();
-  if (derr) throw derr;
+  if (derr) { await supabase!.from("problems").delete().eq("id", prob.id); throw derr; }
   const { error: cerr } = await supabase!.from("formality_defect_comments")
     .insert({ formality_defect_id: def.id, comment_text: text, admin_email: adminEmail });
   if (cerr) throw cerr;
