@@ -439,7 +439,7 @@ export default function App() {
     if (newStatus === "Submitted to IPOPHIL" && !filing) { toast("Pick the date of filing."); return; }
     if (isSupabaseConfigured) {
       await run(async () => {
-        if (remark.trim()) await dbAddRemark(selected.dbId!, remark.trim(), me!.email);
+        if (remark.trim()) await dbAddRemark(selected.dbId!, remark.trim(), me!.email, true);
         await dbUpdateStatus(selected.dbId!, newStatus, filing || undefined);
         await dbLogAction("status_change", selected.id, { from: selected.status, to: newStatus, ...(filing ? { filing_date: filing } : {}) });
       }, "Status updated.");

@@ -59,8 +59,10 @@ create trigger trg_ser_on_filing
 create or replace function reject_copyright_defect() returns trigger
 language plpgsql as $$
 begin
-  if tg_table_name = 'problems' and new.problem_type is distinct from 'Formality Defect' then
-    return new;
+  if tg_table_name = 'problems' then
+    if (to_jsonb(new) ->> 'problem_type') is distinct from 'Formality Defect' then
+      return new;
+    end if;
   end if;
   if (select filing_type from submissions where id = new.submission_id) = 'Copyright' then
     raise exception 'Formality defects do not apply to Copyright submissions';

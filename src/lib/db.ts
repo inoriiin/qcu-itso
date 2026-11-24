@@ -296,6 +296,7 @@ const notifMessage = (type: string, p: Record<string, unknown>): string => {
   const ref = String(p.reference ?? "");
   switch (type) {
     case "new_submission": return `New submission: ${p.title ?? ref}`;
+    case "submission_received": return `Submission received: ${ref}`;
     case "status_change": return `${ref} moved to ${p.new}`;
     case "remark": return `New remark on ${ref}`;
     case "certificate": return `Certificate issued for ${ref}`;
@@ -369,6 +370,11 @@ export async function dbSubmitPaper(input: {
   }));
   const { error: aerr } = await supabase.from("submission_authors").insert(rows);
   if (aerr) throw aerr;
+  try {
+    await supabase.rpc("announce_submission", { p_submission: sub.id });
+  } catch (e) {
+    console.warn("[ITSO] announce_submission failed:", (e as { message?: string })?.message ?? e);
+  }
 }
 
 export async function dbUpdateStatus(submissionDbId: string, newStatus: string, filingDate?: string) {
@@ -389,9 +395,9 @@ export async function dbArchive(submissionDbId: string, reason: string) {
   if (error) throw error;
 }
 
-export async function dbAddRemark(submissionDbId: string, text: string, adminEmail: string) {
+export async function dbAddRemark(submissionDbId: string, text: string, adminEmail: string, withStatus = false) {
   const { error } = await supabase!.from("remarks")
-    .insert({ submission_id: submissionDbId, comment_text: text, admin_email: adminEmail });
+    .insert({ submission_id: submissionDbId, comment_text: text, admin_email: adminEmail, with_status: withStatus });
   if (error) throw error;
 }
 
