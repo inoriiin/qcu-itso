@@ -3,7 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>QCU ITSO</title>
+    <link rel="icon" type="image/png" href="/brand/qcu-logo.png" />
+    <title>QCU ITSO · Innovation and Technology Support Office</title>
+    <script>
+      (function () {
+        var t = localStorage.getItem("itso.theme");
+        if (t !== "dark" && t !== "light") t = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.setAttribute("data-theme", t);
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

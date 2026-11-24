@@ -28,7 +28,9 @@ function emailFor(row: Row): { subject: string; html: string } {
   const p = row.payload ?? {};
   const ref = p.reference ? ` (${p.reference})` : "";
   const open = `<p><a href="${Deno.env.get("SITE_URL") ?? "http://localhost:5173"}">Open the ITSO workspace</a></p>`;
-  const wrap = (body: string) => `<div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.5"><p>Hello,</p>${body}${open}<p style="color:#666;font-size:12px">QCU Intellectual Property &amp; Technology Support Office</p></div>`;
+  const siteUrl = (Deno.env.get("SITE_URL") ?? "").replace(/\/+$/, "");
+  const header = `<div style="margin-bottom:14px">${siteUrl ? `<img src="${siteUrl}/brand/qcu-logo.png" alt="" width="42" height="42" style="vertical-align:middle;border-radius:50%">` : ""}<span style="display:inline-block;vertical-align:middle;margin-left:10px"><b style="font-size:15px">Quezon City University</b><br><span style="font-size:12px;color:#666">Innovation and Technology Support Office</span></span></div>`;
+  const wrap = (body: string) => `<div style="font-family:Arial,sans-serif;color:#1a1a1a;line-height:1.5">${header}<p>Hello,</p>${body}${open}<p style="color:#666;font-size:12px">Quezon City University · Innovation and Technology Support Office</p></div>`;
   const fmtDate = (d: any) => d ? new Date(d).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" }) : "";
   switch (row.type) {
     case "new_submission": return { subject: `New submission: ${p.title}`, html: wrap(`<p>A new filing was submitted${ref}: <b>${p.title}</b>.</p>`) };

@@ -29,7 +29,7 @@ export type Event = {
 export type Registration = { id?: string; mine?: boolean; eventTitle: string; student: string; status: "Pending approval" | "Approved" | "Declined" };
 export type Account = { name: string; email: string; role: string; status: string; rawRole?: "student" | "admin" | "super_admin" };
 
-export type SessionUser = { email: string; role: "Admin" | "Student" | null; studentUuid: string | null; isSuper: boolean; fullName: string | null; givenName: string | null; profileCompleted: boolean; studentIdNumber: string | null };
+export type SessionUser = { email: string; role: "Admin" | "Student" | null; studentUuid: string | null; isSuper: boolean; fullName: string | null; givenName: string | null; middleName: string | null; familyName: string | null; suffix: string | null; profileCompleted: boolean; studentIdNumber: string | null; programId: number | null };
 
 const fmt = (d?: string | null) =>
   d ? new Date(d.length === 10 ? `${d}T12:00:00` : d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—";
@@ -71,14 +71,14 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   }
   const { data: role, error: roleErr } = await supabase.rpc("my_role");
   if (roleErr) console.error("[ITSO] my_role RPC failed:", roleErr.message);
-  if (!role) return { email, role: null, studentUuid: null, isSuper: false, fullName: null, givenName: null, profileCompleted: true, studentIdNumber: null }; // signed in but not whitelisted
+  if (!role) return { email, role: null, studentUuid: null, isSuper: false, fullName: null, givenName: null, middleName: null, familyName: null, suffix: null, profileCompleted: true, studentIdNumber: null, programId: null }; // signed in but not whitelisted
   const { data: studentUuid, error: sidErr } = await supabase.rpc("my_student_id");
   if (sidErr) console.error("[ITSO] my_student_id RPC failed:", sidErr.message);
-  let profile: { full_name?: string; given_name?: string; profile_completed?: boolean; student_id_number?: string } = {};
+  let profile: { full_name?: string; given_name?: string; middle_name?: string; family_name?: string; suffix?: string; profile_completed?: boolean; student_id_number?: string; program_id?: number } = {};
   const { data: prof, error: profErr } = await supabase.rpc("my_profile");
   if (profErr) console.warn("[ITSO] my_profile RPC failed:", profErr.message);
   else profile = (prof ?? {}) as typeof profile;
-  return { email, role: role === "student" ? "Student" : "Admin", studentUuid: studentUuid ?? null, isSuper: role === "super_admin", fullName: profile.full_name ?? null, givenName: profile.given_name ?? null, profileCompleted: profile.profile_completed !== false, studentIdNumber: profile.student_id_number ?? null };
+  return { email, role: role === "student" ? "Student" : "Admin", studentUuid: studentUuid ?? null, isSuper: role === "super_admin", fullName: profile.full_name ?? null, givenName: profile.given_name ?? null, middleName: profile.middle_name ?? null, familyName: profile.family_name ?? null, suffix: profile.suffix ?? null, profileCompleted: profile.profile_completed !== false, studentIdNumber: profile.student_id_number ?? null, programId: profile.program_id ?? null };
 }
 
 /* ---------- load ---------- */
@@ -86,7 +86,7 @@ export async function getSessionUser(): Promise<SessionUser | null> {
 export type Workspace = {
   papers: Paper[]; defects: Defect[]; remarks: Record<string, Comment[]>;
   events: Event[]; registrations: Registration[]; accounts: Account[];
-  colleges: string[]; programs: Record<string, string[]>;
+  colleges: string[]; programs: Record<string, string[]>; programById: Record<number, { name: string; college: string }>;
 };
 
 export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null): Promise<Workspace> {
@@ -267,13 +267,15 @@ export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null
 
   const colleges = (cols.data ?? []).map((c) => c.name);
   const programs: Record<string, string[]> = {};
+  const programById: Record<number, { name: string; college: string }> = {};
   for (const p of progs.data ?? []) {
     const cname = (cols.data ?? []).find((c) => c.id === p.college_id)?.name ?? "";
     (programs[cname] = programs[cname] ?? []).push(p.name);
+    programById[p.id] = { name: p.name, college: cname };
   }
 
   void uuidOf;
-  return { papers, defects, remarks, events, registrations, accounts, colleges, programs };
+  return { papers, defects, remarks, events, registrations, accounts, colleges, programs, programById };
 }
 
 /* ---------- notifications + audit log ---------- */
@@ -423,6 +425,20 @@ export async function dbCompleteProfile(input: { given: string; middle: string; 
     programId = prog.id;
   }
   const { error } = await supabase!.rpc("complete_my_profile", {
+    p_given: input.given, p_middle: input.middle || null, p_family: input.family, p_suffix: input.suffix || null,
+    p_student_id_number: input.studentIdNumber ?? null, p_program_id: programId,
+  });
+  if (error) throw error;
+}
+
+export async function dbUpdateMyProfile(input: { given: string; middle: string; family: string; suffix: string; studentIdNumber?: string; programName?: string }) {
+  let programId: number | null = null;
+  if (input.programName) {
+    const { data: prog } = await supabase!.from("programs").select("id").eq("name", input.programName).single();
+    if (!prog) throw new Error(`Program not found: ${input.programName}`);
+    programId = prog.id;
+  }
+  const { error } = await supabase!.rpc("update_my_profile", {
     p_given: input.given, p_middle: input.middle || null, p_family: input.family, p_suffix: input.suffix || null,
     p_student_id_number: input.studentIdNumber ?? null, p_program_id: programId,
   });

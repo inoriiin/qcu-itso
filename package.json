@@ -4,8 +4,11 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "node scripts/gen-dark.mjs",
     "dev": "vite",
+    "prebuild": "node scripts/gen-dark.mjs",
     "build": "tsc -b && vite build",
+    "gen:dark": "node scripts/gen-dark.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
