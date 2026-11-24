@@ -7,7 +7,7 @@ export type Paper = {
   archived?: boolean; archiveReason?: string; drive?: string;
   authorDetails?: { id?: string; name: string; email: string | null }[];
   linkReport?: { at: string; note?: string; by?: string };
-  history: { status: string; at: string; by?: string; atRaw?: string }[];
+  history: { status: string; at: string; by?: string; atRaw?: string; initial?: boolean }[];
   filedRaw?: string;
   certificate?: { link?: string; issued: string };
   ser?: { id: string; triggered: string; deadline: string; deadlineRaw: string; status: "open" | "resolved"; note?: string };
@@ -16,6 +16,7 @@ export type Comment = { text: string; timestamp: string; author: string };
 export type Defect = {
   id: string; problemId?: string; submissionId: string; noticeDate: string; deadline: string;
   status: "open" | "resolved"; comments: Comment[];
+  round?: number; details?: string; deadlineRaw?: string;
 };
 export type Event = {
   id?: string; title: string; type: string; date: string; time: string; mode: string; place: string;
@@ -41,6 +42,12 @@ const addMonthsIso = (date: string, months: number) => {
   const [year, month, day] = date.split("-").map(Number);
   const target = new Date(year, month - 1 + months, 1);
   target.setDate(Math.min(day, new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate()));
+  return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}-${String(target.getDate()).padStart(2, "0")}`;
+};
+
+const addDaysIso = (date: string, days: number) => {
+  const [year, month, day] = date.split("-").map(Number);
+  const target = new Date(year, month - 1, day + days);
   return `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, "0")}-${String(target.getDate()).padStart(2, "0")}`;
 };
 
@@ -196,7 +203,7 @@ export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null
     submitted: fmt(s.date_created),
     filed: s.filing_date ? fmt(s.filing_date) : "—",
     filedRaw: s.filing_date ?? undefined,
-    history: [{ status: "Paper Submitted", at: fmt(s.date_created), atRaw: s.date_created }, ...(historyBySub.get(s.id) ?? [])],
+    history: [{ status: "Under Review", at: fmt(s.date_created), atRaw: s.date_created, initial: true }, ...(historyBySub.get(s.id) ?? [])],
     certificate: certBySub.get(s.id),
     ser: serBySub.get(s.id)?.ser,
     problems: openProblems.get(s.id) ?? 0,
@@ -214,6 +221,9 @@ export async function loadWorkspace(isAdmin: boolean, studentUuid: string | null
     deadline: fmt(d.deadline_date),
     status: d.status,
     comments: commentsByDefect.get(d.id) ?? [],
+    round: d.round_number ?? undefined,
+    details: d.details ?? undefined,
+    deadlineRaw: d.deadline_date ?? undefined,
   }));
 
   const remarks: Record<string, Comment[]> = {};
@@ -289,13 +299,14 @@ const notifMessage = (type: string, p: Record<string, unknown>): string => {
     case "status_change": return `${ref} moved to ${p.new}`;
     case "remark": return `New remark on ${ref}`;
     case "certificate": return `Certificate issued for ${ref}`;
-    case "formality_defect": return `Formality defect round ${p.round} logged on ${ref} — respond by ${fmt(String(p.deadline ?? ""))}`;
+    case "formality_defect": return `${p.label ?? `Formality defect round ${p.round}`} logged on ${ref} — respond by ${fmt(String(p.deadline ?? ""))}`;
     case "registration_request": return `${p.student ?? "A student"} requested to join ${p.event}`;
     case "registration_received": return `Registration received for ${p.event}`;
     case "registration_approved": return `Registration approved for ${p.event}`;
     case "registration_declined": return `Registration declined for ${p.event}`;
+    case "ser_started": return `${ref} filed with IPOPHIL on ${fmt(String(p.filing_date ?? ""))} — SER due ${fmt(String(p.deadline ?? ""))}`;
     case "ser_reminder": return `SER deadline ${p.overdue ? "overdue" : "approaching"} for ${ref} — due ${fmt(String(p.deadline ?? ""))}`;
-    case "defect_reminder": return `Formality defect round ${p.round} ${p.overdue ? "overdue" : "approaching"} for ${ref} — due ${fmt(String(p.deadline ?? ""))}`;
+    case "defect_reminder": return `${p.label ?? `Formality defect round ${p.round}`} ${p.overdue ? "overdue" : "approaching"} for ${ref} — due ${fmt(String(p.deadline ?? ""))}`;
     case "broken_link": return p.by === "ITSO" ? `ITSO can't open the Drive folder for ${ref} — please update the link` : `Broken Drive link reported on ${ref}`;
     case "drive_link_updated": return `Drive link updated on ${ref}`;
     case "new_event": return `New event: ${p.event} on ${fmt(String(p.date ?? ""))}`;
@@ -360,8 +371,9 @@ export async function dbSubmitPaper(input: {
   if (aerr) throw aerr;
 }
 
-export async function dbUpdateStatus(submissionDbId: string, newStatus: string) {
-  const { error } = await supabase!.from("submissions").update({ current_status: newStatus }).eq("id", submissionDbId);
+export async function dbUpdateStatus(submissionDbId: string, newStatus: string, filingDate?: string) {
+  const { error } = await supabase!.from("submissions")
+    .update({ current_status: newStatus, ...(filingDate ? { filing_date: filingDate } : {}) }).eq("id", submissionDbId);
   if (error) throw error;
 }
 
@@ -385,11 +397,11 @@ export async function dbAddRemark(submissionDbId: string, text: string, adminEma
 
 export async function dbAddDefect(submissionDbId: string, noticeDate: string, text: string, adminEmail: string, round: number) {
   const { data: prob, error: perr } = await supabase!.from("problems")
-    .insert({ submission_id: submissionDbId, problem_type: "Formality Defect", date_triggered: noticeDate, deadline_date: addMonthsIso(noticeDate, 2) })
+    .insert({ submission_id: submissionDbId, problem_type: 'Formality Defect', date_triggered: noticeDate, deadline_date: addDaysIso(noticeDate, 60) })
     .select("id").single();
   if (perr) throw perr;
   const { data: def, error: derr } = await supabase!.from("formality_defects")
-    .insert({ problem_id: prob.id, submission_id: submissionDbId, round_number: round, notice_date: noticeDate })
+    .insert({ problem_id: prob.id, submission_id: submissionDbId, round_number: round, notice_date: noticeDate, details: text })
     .select("id").single();
   if (derr) throw derr;
   const { error: cerr } = await supabase!.from("formality_defect_comments")
